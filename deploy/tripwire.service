@@ -1,0 +1,13 @@
+[Unit]
+Description=Tripwire control plane
+After=network.target docker.service
+
+[Service]
+User=root
+WorkingDirectory=/root/tripwire
+EnvironmentFile=/etc/tripwire.env
+ExecStart=/root/tripwire/.venv/bin/uvicorn tripwire.server:app --host 127.0.0.1 --port 8000
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

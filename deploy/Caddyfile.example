@@ -1,0 +1,4 @@
+# Replace <IP> with the VM's public IPv4 with dots turned into dashes, e.g. 203-0-113-7.sslip.io
+<HOST>.sslip.io {
+    reverse_proxy 127.0.0.1:8000
+}

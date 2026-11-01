@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tripwire</title>
+<style>
+:root{--bg:#0e1116;--panel:#161b22;--line:#2a313c;--fg:#e6edf3;--mut:#8b949e;--ok:#2ea043;--bad:#da3633;--warn:#d29922;--acc:#58a6ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 ui-sans-serif,system-ui,sans-serif}
+header{padding:18px 28px;border-bottom:1px solid var(--line);display:flex;gap:18px;align-items:baseline;flex-wrap:wrap}
+h1{margin:0;font-size:22px}header span{color:var(--mut)}
+nav{display:flex;gap:8px;padding:12px 28px;border-bottom:1px solid var(--line)}
+nav button{background:none;border:1px solid var(--line);color:var(--fg);padding:7px 14px;border-radius:6px;cursor:pointer}
+nav button.on{background:var(--panel);border-color:var(--acc)}
+main{padding:22px 28px;max-width:1280px;margin:auto}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px;margin-bottom:16px}
+button.act{background:var(--acc);color:#04111f;border:0;padding:8px 14px;border-radius:6px;font-weight:600;cursor:pointer}
+button.act:disabled{opacity:.5}
+pre{background:#0b0e13;border:1px solid var(--line);padding:10px;border-radius:6px;overflow:auto;max-height:260px;margin:6px 0;font-size:12.5px}
+.step{border-left:3px solid var(--line);padding:4px 12px;margin:10px 0}.step.done{border-color:var(--ok)}
+.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;border:1px solid var(--line);color:var(--mut)}
+.v-safe_to_merge{color:var(--ok)}.v-needs_changes{color:var(--warn)}.v-unsafe{color:var(--bad)}
+table{border-collapse:collapse;width:100%;font-size:13px}th,td{border:1px solid var(--line);padding:5px 6px;text-align:center}
+td.h{background:#3b1517;color:#ff9b97}td.c{background:#12301c;color:#7ee787}td.p{color:var(--mut)}
+th.l,td.l{text-align:left}small{color:var(--mut)}
+textarea{width:100%;min-height:150px;background:#0b0e13;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:8px;font-family:ui-monospace,monospace;font-size:12.5px}
+</style></head><body>
+<header><h1>Tripwire</h1><span>An agent that reviews untrusted code by running it in a sandbox on Vultr.</span></header>
+<nav><button id="t1" class="on" onclick="tab(1)">Review</button><button id="t2" onclick="tab(2)">Containment lab</button></nav>
+<main>
+<section id="p1">
+ <div class="panel"><b>Pick a change to review</b>
+  <div id="samples" style="margin:10px 0;display:flex;gap:8px;flex-wrap:wrap"></div>
+  <small>Or paste a JSON object of files, for example {"calc.py": "def add(a,b): return a+b"}</small>
+  <textarea id="files" placeholder='{"calc.py": "..."}'></textarea>
+  <input id="claim" style="width:100%;margin:8px 0;padding:8px;background:#0b0e13;color:var(--fg);border:1px solid var(--line);border-radius:6px" placeholder="What does this change claim to do?">
+  <button class="act" id="go" onclick="reviewPaste()">Review pasted files</button></div>
+ <div id="out"></div>
+</section>
+<section id="p2" hidden>
+ <div class="panel"><b>Same hostile payloads, different policies.</b>
+  <p><small>Eight payloads run in a decoy container with every guard off, in the full guarded policy, and in the full policy with one guard removed at a time. Red means the payload reached its goal; green means contained. Evidence is labelled observed (measured by the lab host) or self-reported (printed by the payload).</small></p>
+  <button class="act" id="labgo" onclick="runLab()">Run the lab</button> <span id="labstat"></span>
+  <div id="labsum" style="margin-top:12px"></div><div style="overflow:auto"><table id="matrix"></table></div></div>
+</section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+function tab(n){for(const i of [1,2]){$('p'+i).hidden=i!=n;$('t'+i).classList.toggle('on',i==n)}}
+fetch('/api/samples').then(r=>r.json()).then(s=>{for(const k in s){const b=document.createElement('button');b.className='act';b.textContent=s[k].title;b.onclick=()=>review({sample:k});$('samples').append(b)}});
+function reviewPaste(){let f;try{f=JSON.parse($('files').value)}catch(e){alert('files must be JSON');return}review({title:'Pasted change',claim:$('claim').value,files:f})}
+async function review(body){
+  $('out').innerHTML='';document.querySelectorAll('button.act').forEach(b=>b.disabled=true);
+  const r=await fetch('/api/review',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  if(!r.ok){$('out').innerHTML='<div class="panel">'+(await r.text())+'</div>';document.querySelectorAll('button.act').forEach(b=>b.disabled=false);return}
+  const rd=r.body.getReader(),dec=new TextDecoder();let buf='';
+  while(true){const {done,value}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});
+    let i;while((i=buf.indexOf('\n\n'))>=0){const line=buf.slice(0,i);buf=buf.slice(i+2);if(line.startsWith('data: '))show(JSON.parse(line.slice(6)))}}
+  document.querySelectorAll('button.act').forEach(b=>b.disabled=false);
+}
+const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+function show(e){
+  const o=$('out');
+  if(e.type==='step'&&e.status==='done'){
+    let h='<div class="step done"><b>'+e.name+'</b> '+(e.attempt?'<span class="tag">attempt '+e.attempt+'</span>':'');
+    if(e.claims)h+='<div>'+e.claims.map(esc).join('<br>')+'</div><pre>'+esc(e.probe)+'</pre>';
+    if(e.name==='execute'){h+='<span class="tag">exit '+e.exit_code+(e.timed_out?' (timed out)':'')+'</span> <span class="tag">'+e.duration_s+'s</span> <span class="tag">container '+(e.container_destroyed?'destroyed':'STILL PRESENT')+'</span><pre>'+esc(e.output)+'</pre>';
+      if(e.tripwire_events.length)h+='<b style="color:var(--bad)">Tripwire saw '+e.tripwire_events.length+' attempt(s)</b><pre>'+e.tripwire_events.map(x=>esc(x.kind+': '+x.detail)).join('\n')+'</pre>'}
+    if(e.fault)h+=' fault: '+esc(e.fault);
+    o.insertAdjacentHTML('beforeend',h+'</div>')}
+  if(e.type==='report'){o.insertAdjacentHTML('beforeend','<div class="panel"><h2 class="v-'+e.verdict+'" style="margin:0">'+e.verdict.replace(/_/g,' ')+'</h2><ul>'+e.reasons.map(r=>'<li>'+esc(r)+'</li>').join('')+'</ul><b>Containment receipt</b><pre>'+esc(JSON.stringify(e.receipt,null,1))+'</pre></div>')}
+  if(e.type==='error')o.insertAdjacentHTML('beforeend','<div class="panel">'+esc(e.message)+'</div>');
+}
+async function runLab(){
+  $('labgo').disabled=true;$('labstat').textContent='starting...';
+  const r=await fetch('/api/lab/run',{method:'POST'});if(!r.ok){$('labstat').textContent=await r.text();$('labgo').disabled=false;return}
+  const {job}=await r.json();
+  while(true){const s=await (await fetch('/api/lab/'+job)).json();drawLab(s);$('labstat').textContent=s.status+' '+s.cells.length+'/'+s.total;if(s.status!=='running')break;await new Promise(r=>setTimeout(r,1500))}
+  $('labgo').disabled=false;
+}
+function drawLab(s){
+  const modes=[...new Set(s.cells.map(c=>c.mode))],pay=[...new Set(s.cells.map(c=>c.payload))];
+  let h='<tr><th class="l">payload</th>'+modes.map(m=>'<th>'+m.replace('minus_','no ')+'</th>').join('')+'</tr>';
+  for(const p of pay){h+='<tr><td class="l">'+p+'</td>';for(const m of modes){const c=s.cells.find(x=>x.payload===p&&x.mode===m);
+    h+=c?'<td class="'+(c.harmed?'h':'c')+'" title="'+esc(c.evidence+' ['+c.source+']')+'">'+(c.harmed?'reached goal':'contained')+'</td>':'<td class="p">...</td>'}h+='</tr>'}
+  $('matrix').innerHTML=h;
+  if(s.summary)$('labsum').innerHTML='Unguarded: <b>'+s.summary.unguarded_harmed+'</b> of 8 payloads reached their goal. Full policy: <b>'+s.summary.guarded_harmed+'</b>. Containers destroyed: <b>'+s.summary.all_containers_destroyed+'</b>.';
+}
+</script></body></html>
